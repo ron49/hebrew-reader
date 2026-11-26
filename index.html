@@ -36,6 +36,10 @@
   .chunk .acts button { padding:4px 10px; font-size:13px; }
   .bar { height:6px; background:var(--line); border-radius:4px; overflow:hidden; margin-top:8px; }
   .bar > div { height:100%; width:0%; background:var(--acc); transition: width .3s; }
+  .chunk .txt .s { border-radius:4px; -webkit-box-decoration-break:clone; box-decoration-break:clone; }
+  .chunk .txt.kar .s { cursor:pointer; }
+  .chunk .txt .s.on { background:#ffe08a; }
+  .kopt { display:inline-flex; gap:6px; align-items:center; margin:0; font-size:14px; color:var(--ink); }
   details summary { cursor:pointer; color:var(--acc); font-size:14px; }
   .note { font-size:13px; color:var(--mute); }
   @media (max-width:600px){
@@ -50,7 +54,7 @@
 <body>
 <div class="wrap">
   <h1>מקריא טקסט עברי</h1>
-  <div class="sub">מדביקים טקסט (או טוענים קובץ טקסט), והדף מפיק הקראה בעזרת Gemini TTS ומאפשר להאזין ולהוריד קובץ אודיו אחד.</div>
+  <div class="sub">מדביקים טקסט (או טוענים קובץ טקסט), והדף מפיק הקראה בעזרת Gemini TTS ומאפשר להאזין, לראות את המשפט המוקרא מודגש (מצב קריוקי), ולהוריד קובץ אודיו אחד.</div>
 
   <div class="card">
     <label for="key">מפתח API של Gemini (נשמר בדפדפן הזה בלבד)</label>
@@ -99,6 +103,7 @@
       <button class="sec" id="playBtn" disabled>נגן הכול</button>
       <button class="sec" id="pauseBtn" disabled>השהה</button>
       <button class="sec" id="dlBtn" disabled>הורד קובץ WAV</button>
+      <label class="kopt"><input type="checkbox" id="karaoke" checked> מצב קריוקי</label>
     </div>
     <div class="bar"><div id="prog"></div></div>
     <div class="status" id="status"></div>
@@ -316,6 +321,137 @@ async function ttsRobust(text, depth){
   return pcm;
 }
 
+// ---------- karaoke mode: sentence highlighting synced to the audio ----------
+// Audio is NOT touched. We split each chunk's text into sentences, find the real pauses in the finished audio
+// (silence detection), and align the sentences to those pauses together with a length-based estimate.
+const K_PW = { para: 14, sent: 7, comma: 3, end: 0 };
+const K_LEN = s => (s.match(/[\p{L}\p{N}]/gu) || []).length;
+function kUnits(text){
+  const raw = [];
+  const parts = text.split(/(\n\s*\n)/);
+  for (let pi = 0; pi < parts.length; pi += 2){
+    const p = parts[pi], sep = parts[pi+1] || "";
+    if (!p.trim()){ if (raw.length) raw[raw.length-1].t += p + sep; continue; }
+    const sents = p.match(/[^.!?׃:;]+[.!?׃:;]*["'”’)\]״]*\s*/g);
+    const list = (sents && sents.join("") === p) ? sents : [p];
+    list.forEach(s => raw.push({ t: s, kind: "sent" }));
+    const last = raw[raw.length-1]; last.t += sep; last.kind = sep ? "para" : "end";
+  }
+  if (!raw.length) return [{ t: text, kind: "end", w: Math.max(1, K_LEN(text)) }];
+  // merge very short fragments (titles, "א.", abbreviations) into their neighbour
+  const merged = [];
+  for (let i = 0; i < raw.length; i++){
+    const u = raw[i];
+    if (K_LEN(u.t) < 14 && i + 1 < raw.length){ raw[i+1] = { t: u.t + raw[i+1].t, kind: raw[i+1].kind }; continue; }
+    if (K_LEN(u.t) < 14 && merged.length){ const pr = merged[merged.length-1]; pr.t += u.t; pr.kind = u.kind; continue; }
+    merged.push({ t: u.t, kind: u.kind });
+  }
+  // split very long sentences at a comma near the middle
+  const out = [];
+  const splitLong = u => {
+    if (u.t.length <= 260){ out.push(u); return; }
+    const mid = u.t.length / 2; let best = -1;
+    for (let i = 0; i < u.t.length; i++){
+      if (u.t[i] === "," && i > 50 && i < u.t.length - 50 && (best < 0 || Math.abs(i - mid) < Math.abs(best - mid))) best = i;
+    }
+    if (best < 0){ out.push(u); return; }
+    splitLong({ t: u.t.slice(0, best + 1), kind: "comma" });
+    splitLong({ t: u.t.slice(best + 1), kind: u.kind });
+  };
+  merged.forEach(splitLong);
+  out.forEach((u, i) => {
+    const commas = (u.t.match(/[,،]/g) || []).length;
+    u.w = Math.max(1, K_LEN(u.t) + commas * 2.5 + (i === out.length - 1 ? 0 : (K_PW[u.kind] || 0)));
+  });
+  return out;
+}
+// find speech start/end and the pauses (silences) inside the audio
+function kPauses(pcm){
+  const s16 = (pcm.byteOffset & 1) ? new Int16Array(pcm.slice().buffer) : new Int16Array(pcm.buffer, pcm.byteOffset, pcm.length >> 1);
+  const F = Math.round(RATE * 0.01), nF = Math.floor(s16.length / F);
+  const db = new Float32Array(nF);
+  for (let f = 0; f < nF; f++){
+    let a = 0; const b = f * F;
+    for (let i = 0; i < F; i++){ const v = s16[b+i]; a += v * v; }
+    db[f] = 10 * Math.log10(a / F / 1073741824 + 1e-10);
+  }
+  const loud = Array.from(db).filter(x => x > -55).sort((x, y) => x - y);
+  const lvl = loud.length ? loud[Math.floor(loud.length * 0.9)] : -30;
+  const thr = Math.max(lvl - 25, -62);
+  let runs = [];
+  for (let f = 0; f < nF; ){
+    if (db[f] < thr){ let e = f; while (e < nF && db[e] < thr) e++; runs.push([f, e]); f = e; } else f++;
+  }
+  const mergedRuns = [];
+  for (const r of runs){
+    const pr = mergedRuns[mergedRuns.length-1];
+    if (pr && r[0] - pr[1] <= 3) pr[1] = r[1]; else mergedRuns.push([r[0], r[1]]);
+  }
+  runs = mergedRuns;
+  const T = f => f * F / RATE;
+  let s0 = 0, s1 = nF * F / RATE;
+  if (runs.length && runs[0][0] === 0){ s0 = T(runs[0][1]); runs.shift(); }
+  if (runs.length && runs[runs.length-1][1] === nF){ s1 = T(runs[runs.length-1][0]); runs.pop(); }
+  const cand = runs.filter(r => r[1] - r[0] >= 15).map(r => ({ t: T((r[0] + r[1]) / 2), a: T(r[0]), dur: T(r[1] - r[0]) }));
+  return { s0, s1, cand };
+}
+// returns start time (seconds) of every unit
+function kAlign(units, pcm){
+  const n = units.length, starts = new Array(n).fill(0);
+  if (n < 2) return starts;
+  const { s0, s1, cand } = kPauses(pcm);
+  const W = [0]; units.forEach(u => W.push(W[W.length-1] + u.w));
+  const span = Math.max(1, s1 - s0), r = span / W[n], m = cand.length;
+  const prop = k => s0 + r * W[k];
+  if (!m){ for (let k = 1; k < n; k++) starts[k] = prop(k); return starts; }
+  const KMAX = 6, SKIP = 0.9, NW = 1, INF = 1e18;
+  const seg = (act, exp) => { const z = (act - exp) / (0.30 * exp + 0.6); return z * z; };
+  const node = (k, j) => { const d = cand[j].dur; let c = 1 - Math.min(d, 0.8) / 0.8; if (units[k-1].kind === "para" && d < 0.4) c += 0.4; return c; };
+  const dp = [], pk = [], pj = [];
+  for (let k = 0; k < n; k++){ dp.push(new Float64Array(m).fill(INF)); pk.push(new Int16Array(m).fill(-1)); pj.push(new Int16Array(m).fill(-1)); }
+  for (let k = 1; k < n; k++){
+    for (let j = 0; j < m; j++){
+      let best = INF, bk = -1, bj = -1;
+      const act0 = cand[j].t - s0;
+      if (act0 > 0.05){ best = seg(act0, r * W[k]) + SKIP * (k - 1); }
+      for (let k2 = Math.max(1, k - KMAX); k2 < k; k2++){
+        const exp = r * (W[k] - W[k2]), maxAct = 3 * exp + 3;
+        for (let j2 = j - 1; j2 >= 0; j2--){
+          const act = cand[j].t - cand[j2].t;
+          if (act > maxAct) break;
+          const v = dp[k2][j2];
+          if (v >= INF) continue;
+          const c = v + seg(act, exp) + SKIP * (k - k2 - 1);
+          if (c < best){ best = c; bk = k2; bj = j2; }
+        }
+      }
+      if (best < INF){ dp[k][j] = best + NW * node(k, j); pk[k][j] = bk; pj[k][j] = bj; }
+    }
+  }
+  let bestTotal = SKIP * (n - 1), ek = -1, ej = -1;
+  for (let k = 1; k < n; k++) for (let j = 0; j < m; j++){
+    const v = dp[k][j]; if (v >= INF) continue;
+    const act = s1 - cand[j].t; if (act <= 0.05) continue;
+    const tot = v + seg(act, r * (W[n] - W[k])) + SKIP * (n - 1 - k);
+    if (tot < bestTotal){ bestTotal = tot; ek = k; ej = j; }
+  }
+  const snap = new Map();
+  for (let k = ek, j = ej; k > 0 && j >= 0; ){
+    const c = cand[j]; snap.set(k, c.a + 0.65 * c.dur);
+    const k2 = pk[k][j], j2 = pj[k][j]; k = k2; j = j2;
+  }
+  let ka = 0, ta = s0;
+  for (let k = 1; k <= n; k++){
+    if (k === n || snap.has(k)){
+      const tb = k === n ? s1 : snap.get(k);
+      for (let q = ka + 1; q < k; q++) starts[q] = ta + (tb - ta) * (W[q] - W[ka]) / (W[k] - W[ka]);
+      if (k < n) starts[k] = tb;
+      ka = k; ta = tb;
+    }
+  }
+  return starts;
+}
+
 // ---------- UI ----------
 function setStatus(t, isErr){ const s=$("status"); s.textContent=t; s.className = "status" + (isErr ? " err" : ""); }
 function render(){
@@ -324,7 +460,17 @@ function render(){
     const d = document.createElement("div"); d.className = "chunk" + (i===playIdx && playing ? " playing" : ""); d.id = "ch"+i;
     const stateTxt = c.state === "done" ? "מוכן" : c.state === "busy" ? "מפיק..." : c.state === "err" ? "שגיאה: " + c.err : "ממתין";
     d.innerHTML = '<div class="top"><span>קטע ' + (i+1) + ' מתוך ' + chunks.length + ' · ' + stateTxt + '</span><span class="acts"></span></div><div class="txt"></div>';
-    d.querySelector(".txt").textContent = c.text;
+    const tx = d.querySelector(".txt");
+    if (karaokeOn() && c.pcm){
+      c.units = c.units || kUnits(c.text);
+      tx.classList.add("kar");
+      c.units.forEach((u, ui) => {
+        const core = u.t.replace(/\s+$/, ""), ws = u.t.slice(core.length);
+        const s = document.createElement("span"); s.className = "s"; s.dataset.i = ui; s.textContent = core; tx.appendChild(s);
+        if (ws) tx.appendChild(document.createTextNode(ws));
+      });
+      tx.onclick = ev => { const s = ev.target.closest && ev.target.closest(".s"); if (s) kSeek(i, +s.dataset.i); };
+    } else tx.textContent = c.text;
     const acts = d.querySelector(".acts");
     if (c.pcm){ const b=document.createElement("button"); b.className="sec"; b.textContent="נגן מכאן"; b.onclick=()=>playFrom(i); acts.appendChild(b); }
     const r=document.createElement("button"); r.className="sec"; r.textContent=c.pcm ? "הפק מחדש" : "הפק"; r.disabled = genRunning; r.onclick=()=>genOne(i); acts.appendChild(r);
@@ -337,7 +483,7 @@ function render(){
 }
 async function genOne(i){
   const c = chunks[i]; c.state = "busy"; c.err = ""; render();
-  try { c.pcm = await ttsRobust(c.text, 0); c.state = "done"; cachePut(c.text, c.pcm); }
+  try { c.pcm = await ttsRobust(c.text, 0); c.align = null; c.state = "done"; cachePut(c.text, c.pcm); }
   catch(e){ c.state = "err"; c.err = e.message; c.pcm = null; throw e; }
   finally { render(); }
 }
@@ -365,11 +511,14 @@ function playCurrent(){
   if (playIdx >= chunks.length){ playing = false; playIdx = -1; render(); return; }
   const c = chunks[playIdx];
   if (!c.url) c.url = URL.createObjectURL(makeWav([c.pcm], 0));
+  if (karaokeOn() && !c.align){ try { c.units = c.units || kUnits(c.text); c.align = kAlign(c.units, c.pcm); } catch(e){ c.align = null; } }
   player.src = c.url;
+  const seekTo = pendingSeek; pendingSeek = null;
+  if (seekTo != null) player.onloadedmetadata = () => { player.onloadedmetadata = null; try { player.currentTime = seekTo; } catch(e){} };
   player.onended = () => { playIdx++; playCurrent(); };
   player.play().catch(() => { playing = false; render(); });
   render();
-  const el = $("ch"+playIdx); if (el) el.scrollIntoView({block:"center", behavior:"smooth"});
+  if (!(karaokeOn() && c.align)){ const el = $("ch"+playIdx); if (el) el.scrollIntoView({block:"center", behavior:"smooth"}); }
 }
 function stopPlayback(){ try { player.pause(); } catch(e){} playing = false; }
 $("playBtn").onclick = () => playFrom(0);
@@ -428,6 +577,42 @@ async function playDemo(){
 demo.onended = () => { $("demoBtn").textContent = "▶ שמע דוגמה"; $("demoMsg").textContent = "הדוגמה הסתיימה."; };
 $("demoBtn").onclick = playDemo;
 $("voice").addEventListener("change", () => { demo.pause(); demoVoice = null; $("demoBtn").textContent = "▶ שמע דוגמה"; $("demoMsg").textContent = "בחרת " + $("voice").value + ". לחץ על הכפתור כדי לשמוע דוגמה."; });
+
+
+// ---------- karaoke runtime ----------
+let pendingSeek = null, kRaf = 0;
+function karaokeOn(){ const e = $("karaoke"); return !e || e.checked; }
+(function(){ const e = $("karaoke"); const v = lsGet("hr_karaoke"); if (v === "0") e.checked = false; e.addEventListener("change", () => { lsSet("hr_karaoke", e.checked ? "1" : "0"); render(); }); })();
+function kScroll(s){
+  const r = s.getBoundingClientRect(), h = window.innerHeight || 700;
+  if (r.top < h * 0.12 || r.bottom > h * 0.78) s.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+function kTick(){
+  if (!karaokeOn() || playIdx < 0) return;
+  const c = chunks[playIdx]; if (!c || !c.align) return;
+  const el = $("ch" + playIdx); if (!el) return;
+  const sp = el._sp || (el._sp = el.querySelectorAll(".s")); if (!sp.length) return;
+  const st = c.align, t = player.currentTime;
+  let k = el._k || 0;
+  while (k + 1 < st.length && st[k+1] <= t) k++;
+  while (k > 0 && st[k] > t) k--;
+  el._k = k;
+  if (k !== el._on){
+    if (el._on != null && sp[el._on]) sp[el._on].classList.remove("on");
+    if (sp[k]){ sp[k].classList.add("on"); kScroll(sp[k]); }
+    el._on = k;
+  }
+}
+function kLoop(){ kRaf = 0; if (!playing || player.paused) return; kTick(); kRaf = requestAnimationFrame(kLoop); }
+player.addEventListener("play", () => { $("pauseBtn").textContent = "השהה"; if (!kRaf) kRaf = requestAnimationFrame(kLoop); });
+player.addEventListener("seeked", kTick);
+function kSeek(i, ui){
+  const c = chunks[i]; if (!c || !c.pcm) return;
+  if (!c.align){ try { c.units = c.units || kUnits(c.text); c.align = kAlign(c.units, c.pcm); } catch(e){ return; } }
+  const t = c.align[ui] || 0;
+  if (playing && playIdx === i && player.src){ player.currentTime = t; if (player.paused) player.play(); return; }
+  stopPlayback(); pendingSeek = t; playIdx = i; playing = true; playCurrent();
+}
 
 // ---------- phone/PWA extras ----------
 // keep the screen awake while generating (long runs, 3 requests/minute)
