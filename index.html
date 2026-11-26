@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>מקריא טקסט עברי – Gemini TTS</title>
+<meta name="theme-color" content="#2f5d50">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root { --bg:#f7f6f2; --card:#fff; --ink:#1d1d1b; --mute:#6b6a65; --line:#dedcd3; --acc:#2f5d50; --acc2:#e8f0ed; --err:#a33; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family: "Segoe UI", Arial, "Noto Sans Hebrew", sans-serif; line-height:1.55; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 18px 14px 60px; }
+  h1 { font-size: 22px; margin: 6px 0 2px; }
+  .sub { color:var(--mute); font-size: 14px; margin-bottom: 14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+  label { display:block; font-size:13px; color:var(--mute); margin:8px 0 3px; }
+  input, select, textarea, button { font: inherit; }
+  input[type=text], input[type=password], select { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); }
+  textarea { width:100%; min-height: 200px; padding:10px; border:1px solid var(--line); border-radius:8px; resize: vertical; direction: rtl; }
+  .row { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+  @media (max-width:600px){ .row { grid-template-columns: 1fr; } }
+  button { border:0; border-radius:8px; padding:9px 14px; cursor:pointer; background:var(--acc); color:#fff; }
+  button.sec { background:var(--acc2); color:var(--acc); }
+  button:disabled { opacity:.45; cursor:default; }
+  .btns { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; align-items:center; }
+  .status { font-size:14px; color:var(--mute); }
+  .err { color:var(--err); }
+  .chunk { border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin:8px 0; background:#fff; }
+  .chunk.playing { border-color:var(--acc); background:var(--acc2); }
+  .chunk .top { display:flex; gap:8px; align-items:center; justify-content:space-between; margin-bottom:4px; font-size:13px; color:var(--mute); }
+  .chunk .txt { font-size:15px; white-space:pre-wrap; }
+  .chunk .acts { display:flex; gap:6px; }
+  .chunk .acts button { padding:4px 10px; font-size:13px; }
+  .bar { height:6px; background:var(--line); border-radius:4px; overflow:hidden; margin-top:8px; }
+  .bar > div { height:100%; width:0%; background:var(--acc); transition: width .3s; }
+  details summary { cursor:pointer; color:var(--acc); font-size:14px; }
+  .note { font-size:13px; color:var(--mute); }
+  @media (max-width:600px){
+    .wrap { padding: 12px 10px 80px; }
+    button { padding: 12px 16px; font-size: 16px; }
+    .chunk .acts button { padding: 8px 12px; font-size: 14px; }
+    input[type=text], input[type=password], select { padding: 11px 10px; font-size: 16px; }
+    textarea { font-size: 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>מקריא טקסט עברי</h1>
+  <div class="sub">מדביקים טקסט (או טוענים קובץ טקסט), והדף מפיק הקראה בעזרת Gemini TTS ומאפשר להאזין ולהוריד קובץ אודיו אחד.</div>
+
+  <div class="card">
+    <label for="key">מפתח API של Gemini (נשמר בדפדפן הזה בלבד)</label>
+    <input id="key" type="password" placeholder="AIza..." autocomplete="off">
+    <div class="note">מפיקים מפתח חינמי ב-aistudio.google.com תחת Get API key.</div>
+    <div class="row">
+      <div>
+        <label for="voice">קול</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="voice"></select>
+          <button class="sec" id="demoBtn" type="button" style="white-space:nowrap">▶ שמע דוגמה</button>
+        </div>
+        <div class="note" id="demoMsg">הדוגמאות הן ההדגמות שגוגל מפרסמת בתיעוד. ייתכן שהן באנגלית.</div>
+      </div>
+      <div>
+        <label for="model">מודלים, לפי סדר (מעבר אוטומטי כשנגמרת המכסה היומית)</label>
+        <input id="model" type="text" value="gemini-3.8-flash-tts, gemini-3.8-flash-lite-tts, gemini-3.1-flash-tts-preview" dir="ltr">
+      </div>
+    </div>
+    <label for="style">סגנון קריאה</label>
+    <input id="style" type="text" value="קריאה רגועה, ברורה ומדויקת, בקצב בינוני, כמו קריין של ספר לימוד">
+    <details style="margin-top:8px"><summary>הגדרות מתקדמות</summary>
+      <div class="row">
+        <div><label for="maxc">אורך מקסימלי לקטע (תווים)</label><input id="maxc" type="text" value="3500" dir="ltr"></div>
+        <div><label for="pace">מרווח מינימלי בין בקשות (שניות)</label><input id="pace" type="text" value="21" dir="ltr"></div>
+        <div><label for="gap">השהיה בין קטעים בקובץ המאוחד (שניות)</label><input id="gap" type="text" value="0.4" dir="ltr"></div>
+      </div>
+      <div class="note" style="margin-top:6px">אם המודל לא מוכר, הדף מנסה את הפורמט הישן (generateContent) לכל שם שאינו מתחיל ב-gemini-3.8. אפשר להחליף את שם המודל בשדה למעלה.</div>
+    </details>
+  </div>
+
+  <div class="card">
+    <label for="text">הטקסט</label>
+    <textarea id="text" placeholder="הדבק כאן את הטקסט. כל פסקה מופרדת בשורה ריקה."></textarea>
+    <div class="btns">
+      <input id="file" type="file" accept=".txt,.md,text/plain" style="display:none">
+      <button class="sec" id="loadBtn">טען קובץ טקסט</button>
+      <button class="sec" id="splitBtn">פצל לקטעים</button>
+    </div>
+  </div>
+
+  <div class="card" id="outCard" style="display:none">
+    <div class="btns" style="margin-top:0">
+      <button id="genBtn">הפק את כל הקטעים</button>
+      <button class="sec" id="stopBtn" disabled>עצור</button>
+      <button class="sec" id="playBtn" disabled>נגן הכול</button>
+      <button class="sec" id="pauseBtn" disabled>השהה</button>
+      <button class="sec" id="dlBtn" disabled>הורד קובץ WAV</button>
+    </div>
+    <div class="bar"><div id="prog"></div></div>
+    <div class="status" id="status"></div>
+    <div id="chunks"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const VOICES = ["Kore","Zephyr","Puck","Charon","Fenrir","Leda","Orus","Aoede","Callirrhoe","Autonoe","Enceladus","Iapetus","Umbriel","Algieba","Despina","Erinome","Algenib","Rasalgethi","Laomedeia","Achernar","Alnilam","Schedar","Gacrux","Pulcherrima","Achird","Zubenelgenubi","Sadachbia","Sadaltager","Vindemiatrix","Sulafat"];
+const $ = id => document.getElementById(id);
+const RATE = 24000;
+let chunks = [];          // {text, pcm:Uint8Array|null, url, state}
+let stopFlag = false, genRunning = false;
+let player = new Audio(), playIdx = -1, playing = false;
+
+// ---------- settings ----------
+function lsGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
+function lsSet(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
+VOICES.forEach(v => { const o=document.createElement("option"); o.value=v; o.textContent=v; $("voice").appendChild(o); });
+["key","voice","model","style","maxc","gap","pace"].forEach(id => {
+  const v = lsGet("hr_"+id); if (v !== null && v !== "") $(id).value = v;
+  $(id).addEventListener("change", () => lsSet("hr_"+id, $(id).value));
+});
+
+// ---------- splitting ----------
+function splitSentences(p, maxLen){
+  const sents = p.match(/[^.!?׃:]+[.!?׃:]*\s*/g) || [p];
+  const out = []; let cur = "";
+  for (const s0 of sents){
+    const sent = s0;
+    if (sent.length > maxLen){
+      if (cur.trim()){ out.push(cur.trim()); cur = ""; }
+      let w = "";
+      for (const word of sent.split(" ")){
+        if ((w + " " + word).length > maxLen && w){ out.push(w.trim()); w = ""; }
+        w += (w ? " " : "") + word;
+      }
+      cur = w + " "; continue;
+    }
+    if ((cur + sent).length > maxLen && cur){ out.push(cur.trim()); cur = ""; }
+    cur += sent;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+// Greedy packing: fill each chunk with whole paragraphs up to maxLen; only paragraphs longer than maxLen are cut (at sentence ends).
+function splitText(raw, maxLen){
+  const paras = raw.replace(/\r/g,"").split(/\n\s*\n/).map(p => p.replace(/\s+/g," ").trim()).filter(Boolean);
+  const units = [];
+  for (const p of paras){ if (p.length <= maxLen) units.push(p); else splitSentences(p, maxLen).forEach(x => units.push(x)); }
+  const out = []; let cur = "";
+  for (const u of units){
+    if (cur && (cur.length + 2 + u.length) > maxLen){ out.push(cur); cur = ""; }
+    cur = cur ? cur + "\n\n" + u : u;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+// ---------- audio helpers ----------
+function b64ToU8(b64){ const bin=atob(b64); const u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i); return u; }
+function pcmFromWavOrRaw(u8){
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const tag = String.fromCharCode(u8[0],u8[1],u8[2],u8[3]);
+  if (tag !== "RIFF") return u8;
+  let off = 12;
+  while (off + 8 <= u8.length){
+    const id = String.fromCharCode(u8[off],u8[off+1],u8[off+2],u8[off+3]);
+    let size = dv.getUint32(off+4, true);
+    if (id === "data"){
+      const start = off + 8;
+      if (size === 0 || size === 0xFFFFFFFF || start + size > u8.length) size = u8.length - start;
+      return u8.subarray(start, start + size);
+    }
+    off += 8 + size + (size & 1);
+  }
+  return u8.subarray(44);
+}
+function makeWav(pcmParts, gapSec){
+  const gapBytes = Math.max(0, Math.round(gapSec * RATE)) * 2;
+  let total = 0;
+  pcmParts.forEach((p,i) => { total += p.length + (i < pcmParts.length-1 ? gapBytes : 0); });
+  const buf = new ArrayBuffer(44 + total); const dv = new DataView(buf); const u8 = new Uint8Array(buf);
+  const w = (o,s) => { for (let i=0;i<s.length;i++) dv.setUint8(o+i, s.charCodeAt(i)); };
+  w(0,"RIFF"); dv.setUint32(4, 36 + total, true); w(8,"WAVE"); w(12,"fmt ");
+  dv.setUint32(16,16,true); dv.setUint16(20,1,true); dv.setUint16(22,1,true);
+  dv.setUint32(24,RATE,true); dv.setUint32(28,RATE*2,true); dv.setUint16(32,2,true); dv.setUint16(34,16,true);
+  w(36,"data"); dv.setUint32(40,total,true);
+  let pos = 44;
+  pcmParts.forEach((p,i) => { u8.set(p,pos); pos += p.length; if (i < pcmParts.length-1) pos += gapBytes; });
+  return new Blob([buf], {type:"audio/wav"});
+}
+
+// ---------- Gemini calls ----------
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const models = () => $("model").value.split(",").map(x => x.trim()).filter(Boolean);
+const deadModels = new Set();
+let lastReq = 0;
+async function paceWait(){
+  const gap = Math.max(0, (parseFloat($("pace").value) || 21) * 1000);
+  const w = lastReq + gap - Date.now();
+  if (w > 0){ setStatus("ממתין " + Math.ceil(w/1000) + " שניות כדי לא לעבור את מגבלת הבקשות לדקה..."); await sleep(w); }
+  lastReq = Date.now();
+}
+async function ttsRequest(text){
+  for (;;){
+    const model = models().find(m => !deadModels.has(m));
+    if (!model) throw new Error("נגמרה המכסה היומית בכל המודלים ברשימה. מה שהופק נשמר בדפדפן; המשך אחרי איפוס המכסה.");
+    try { return await ttsRequestWith(text, model); }
+    catch(e){
+      if (e.daily){ deadModels.add(model); setStatus("נגמרה המכסה היומית של " + model + ". עובר למודל הבא ברשימה..."); continue; }
+      throw e;
+    }
+  }
+}
+async function ttsRequestWith(text, model){
+  const key = $("key").value.trim(); if (!key) throw new Error("חסר מפתח API");
+  const voice = $("voice").value; const style = $("style").value.trim();
+  let url, body;
+  if (model.startsWith("gemini-3.")){
+    url = "https://generativelanguage.googleapis.com/v1beta/interactions";
+    const content = { type:"text", text };
+    if (style) content.annotations = [{ type:"speech_metadata", style }];
+    body = { model, input:[{ type:"user_input", content:[content] }], response_format:{ type:"audio" }, generation_config:{ speech_config:[{ voice }] } };
+  } else {
+    url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(model) + ":generateContent";
+    const prefix = (style ? style + ". " : "") + "קרא בעברית בדיוק את הטקסט הבא, מילה במילה, בלי להוסיף דבר: ";
+    body = { contents:[{ parts:[{ text: prefix + text }] }], generationConfig:{ responseModalities:["AUDIO"], speechConfig:{ voiceConfig:{ prebuiltVoiceConfig:{ voiceName: voice } } } } };
+  }
+  for (let attempt=0; attempt<6; attempt++){
+    if (stopFlag) throw new Error("נעצר");
+    await paceWait();
+    const res = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json", "x-goog-api-key":key }, body: JSON.stringify(body) });
+    if (res.status === 429 || res.status === 503){
+      const errData = await res.json().catch(() => ({}));
+      const msg = (errData.error && errData.error.message) || "";
+      if (/PerDay|per_day|per day|daily/i.test(msg + JSON.stringify(errData.error || {}))){ const de = new Error("נגמרה המכסה היומית של " + model); de.daily = true; throw de; }
+      let wait = 15000 + attempt*10000;
+      const m = JSON.stringify(errData.error || {}).match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/);
+      if (m) wait = Math.ceil(parseFloat(m[1]) * 1000) + 2000;
+      setStatus("מגבלת קצב או עומס (קוד " + res.status + "). ממתין " + Math.round(wait/1000) + " שניות ומנסה שוב... " + msg.slice(0,140));
+      await sleep(wait); continue;
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data.error && data.error.message) || ("שגיאת שרת " + res.status));
+    let b64 = null;
+    if (data.steps){
+      const items = [];
+      data.steps.forEach(s => { if (s.type === "model_output" && s.content) s.content.forEach(c => { if (c.type === "audio" && c.data) items.push(c.data); }); });
+      b64 = items.length ? items[items.length-1] : null;
+    } else if (data.candidates){
+      const parts = (data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+      const p = parts.find(x => x.inlineData && x.inlineData.data); b64 = p ? p.inlineData.data : null;
+    }
+    if (!b64) throw new Error("התשובה לא הכילה אודיו");
+    return pcmFromWavOrRaw(b64ToU8(b64));
+  }
+  throw new Error("חרגת ממגבלת הקצב. נסה שוב מאוחר יותר");
+}
+
+// ---------- cache (IndexedDB) so finished chunks survive closing the tab ----------
+let dbp = null;
+function openDB(){
+  if (dbp) return dbp;
+  dbp = new Promise(res => {
+    try {
+      const r = indexedDB.open("hebrew-reader", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("a");
+      r.onsuccess = () => res(r.result); r.onerror = () => res(null);
+    } catch(e){ res(null); }
+  });
+  return dbp;
+}
+function cacheKey(text){ return [$("voice").value, $("style").value.trim(), text].join("\u0001"); }
+async function cacheGet(text){
+  const db = await openDB(); if (!db) return null;
+  return new Promise(res => { try { const q = db.transaction("a").objectStore("a").get(cacheKey(text)); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); } catch(e){ res(null); } });
+}
+async function cachePut(text, pcm){
+  const db = await openDB(); if (!db) return;
+  try { db.transaction("a","readwrite").objectStore("a").put(pcm, cacheKey(text)); } catch(e){}
+}
+
+// ---------- robust generation: detect truncated audio and split in half ----------
+function suspiciouslyShort(text, pcm){
+  const dur = pcm.length / 2 / RATE;               // seconds of audio
+  return text.length > 600 && dur < text.length / 28; // Hebrew narration is roughly 14 chars/sec; under half of that = likely cut off
+}
+function splitInHalf(text){
+  const mid = Math.floor(text.length / 2);
+  let cut = -1;
+  for (let d=0; d<text.length/2; d++){
+    for (const i of [mid-d, mid+d]){ if (i>0 && i<text.length-1 && /[.!?׃]/.test(text[i]) && /\s/.test(text[i+1])) { cut = i+1; break; } }
+    if (cut > 0) break;
+  }
+  if (cut < 0) cut = text.indexOf(" ", mid);
+  if (cut < 0) cut = mid;
+  return [text.slice(0,cut).trim(), text.slice(cut).trim()];
+}
+function concatPcm(parts){
+  const gap = new Uint8Array(Math.round(0.3*RATE)*2);
+  let total = 0; parts.forEach((p,i) => total += p.length + (i<parts.length-1 ? gap.length : 0));
+  const out = new Uint8Array(total); let o = 0;
+  parts.forEach((p,i) => { out.set(p,o); o += p.length; if (i<parts.length-1) o += gap.length; });
+  return out;
+}
+async function ttsRobust(text, depth){
+  const pcm = await ttsRequest(text);
+  if (depth < 3 && suspiciouslyShort(text, pcm)){
+    setStatus("האודיו נראה קצר מדי ביחס לטקסט (ייתכן שנחתך). מפצל את הקטע לשניים ומפיק שוב...");
+    const [a,b] = splitInHalf(text);
+    if (a && b) return concatPcm([await ttsRobust(a, depth+1), await ttsRobust(b, depth+1)]);
+  }
+  return pcm;
+}
+
+// ---------- UI ----------
+function setStatus(t, isErr){ const s=$("status"); s.textContent=t; s.className = "status" + (isErr ? " err" : ""); }
+function render(){
+  const box = $("chunks"); box.innerHTML = "";
+  chunks.forEach((c,i) => {
+    const d = document.createElement("div"); d.className = "chunk" + (i===playIdx && playing ? " playing" : ""); d.id = "ch"+i;
+    const stateTxt = c.state === "done" ? "מוכן" : c.state === "busy" ? "מפיק..." : c.state === "err" ? "שגיאה: " + c.err : "ממתין";
+    d.innerHTML = '<div class="top"><span>קטע ' + (i+1) + ' מתוך ' + chunks.length + ' · ' + stateTxt + '</span><span class="acts"></span></div><div class="txt"></div>';
+    d.querySelector(".txt").textContent = c.text;
+    const acts = d.querySelector(".acts");
+    if (c.pcm){ const b=document.createElement("button"); b.className="sec"; b.textContent="נגן מכאן"; b.onclick=()=>playFrom(i); acts.appendChild(b); }
+    const r=document.createElement("button"); r.className="sec"; r.textContent=c.pcm ? "הפק מחדש" : "הפק"; r.disabled = genRunning; r.onclick=()=>genOne(i); acts.appendChild(r);
+    box.appendChild(d);
+  });
+  const done = chunks.filter(c => c.pcm).length;
+  $("prog").style.width = chunks.length ? (100*done/chunks.length) + "%" : "0%";
+  $("playBtn").disabled = done === 0; $("dlBtn").disabled = done === 0;
+  $("pauseBtn").disabled = !playing;
+}
+async function genOne(i){
+  const c = chunks[i]; c.state = "busy"; c.err = ""; render();
+  try { c.pcm = await ttsRobust(c.text, 0); c.state = "done"; cachePut(c.text, c.pcm); }
+  catch(e){ c.state = "err"; c.err = e.message; c.pcm = null; throw e; }
+  finally { render(); }
+}
+async function genAll(){
+  if (genRunning) return; genRunning = true; stopFlag = false; $("genBtn").disabled = true; $("stopBtn").disabled = false;
+  let fails = 0;
+  for (let i=0;i<chunks.length;i++){
+    if (stopFlag) break;
+    if (chunks[i].pcm) continue;
+    setStatus("מפיק קטע " + (i+1) + " מתוך " + chunks.length + "...");
+    try { await genOne(i); } catch(e){ fails++; setStatus("קטע " + (i+1) + " נכשל: " + e.message, true); if (/API key|חסר מפתח|PERMISSION|invalid|המכסה היומית|מגבלת הקצב/i.test(e.message)) break; }
+    await sleep(600);
+  }
+  genRunning = false; $("genBtn").disabled = false; $("stopBtn").disabled = true;
+  const done = chunks.filter(c => c.pcm).length;
+  setStatus(done === chunks.length ? "הכול מוכן. אפשר להאזין או להוריד." : (stopFlag ? "נעצר. " : "") + "הופקו " + done + " מתוך " + chunks.length + ". אפשר ללחוץ שוב כדי להמשיך מהקטעים החסרים.", done !== chunks.length && fails>0);
+  render();
+}
+function playFrom(i){
+  stopPlayback();
+  playIdx = i; playing = true; playCurrent();
+}
+function playCurrent(){
+  while (playIdx < chunks.length && !chunks[playIdx].pcm) playIdx++;
+  if (playIdx >= chunks.length){ playing = false; playIdx = -1; render(); return; }
+  const c = chunks[playIdx];
+  if (!c.url) c.url = URL.createObjectURL(makeWav([c.pcm], 0));
+  player.src = c.url;
+  player.onended = () => { playIdx++; playCurrent(); };
+  player.play().catch(() => { playing = false; render(); });
+  render();
+  const el = $("ch"+playIdx); if (el) el.scrollIntoView({block:"center", behavior:"smooth"});
+}
+function stopPlayback(){ try { player.pause(); } catch(e){} playing = false; }
+$("playBtn").onclick = () => playFrom(0);
+$("pauseBtn").onclick = () => { if (player.paused){ player.play(); $("pauseBtn").textContent="השהה"; } else { player.pause(); $("pauseBtn").textContent="המשך"; } };
+$("stopBtn").onclick = () => { stopFlag = true; };
+$("genBtn").onclick = genAll;
+$("splitBtn").onclick = () => {
+  const t = $("text").value.trim(); if (!t){ setStatus("אין טקסט לפיצול", true); return; }
+  stopPlayback(); chunks.forEach(c => { if (c.url) URL.revokeObjectURL(c.url); });
+  const maxc = Math.max(300, parseInt($("maxc").value,10) || 1200);
+  chunks = splitText(t, maxc).map(x => ({ text:x, pcm:null, url:null, state:"idle", err:"" }));
+  $("outCard").style.display = "block"; setStatus("פוצל ל-" + chunks.length + " קטעים."); render();
+  Promise.all(chunks.map(async c => { const hit = await cacheGet(c.text); if (hit){ c.pcm = hit; c.state = "done"; } })).then(() => {
+    const n = chunks.filter(c => c.pcm).length;
+    if (n) setStatus("פוצל ל-" + chunks.length + " קטעים. " + n + " מהם כבר הופקו בעבר ונטענו מהזיכרון של הדפדפן.");
+    render();
+  });
+};
+$("loadBtn").onclick = () => $("file").click();
+$("file").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  $("text").value = await f.text(); $("splitBtn").click();
+};
+$("dlBtn").onclick = () => {
+  const parts = chunks.filter(c => c.pcm).map(c => c.pcm);
+  const blob = makeWav(parts, parseFloat($("gap").value) || 0);
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "hebrew-reading.wav";
+  document.body.appendChild(a); a.click(); a.remove();
+  setStatus("הקובץ מכיל " + parts.length + " קטעים. אם חלק מהקטעים חסרים, הפק אותם והורד שוב.");
+};
+
+// ---------- voice demos (Google's published samples, played straight from their site) ----------
+const demo = new Audio(); let demoVoice = null;
+function demoUrls(v){
+  const base = "https://docs.cloud.google.com/static/text-to-speech/docs/audio/chirp3-hd-";
+  const n = v.toLowerCase();
+  return v === "Aoede" ? [base + "aoeda.wav", base + "aoede.wav"] : [base + n + ".wav"];
+}
+async function playDemo(){
+  const v = $("voice").value;
+  if (demoVoice === v && !demo.paused){ demo.pause(); $("demoBtn").textContent = "▶ שמע דוגמה"; return; }
+  demo.pause(); demoVoice = v;
+  const urls = demoUrls(v);
+  $("demoMsg").textContent = "טוען דוגמה של " + v + "...";
+  for (const u of urls){
+    try {
+      demo.src = u; await demo.play();
+      $("demoBtn").textContent = "⏸ עצור דוגמה";
+      $("demoMsg").textContent = "מושמעת הדוגמה של " + v + ". לשינוי קול בחר מהרשימה ולחץ שוב.";
+      return;
+    } catch(e){ /* try next url */ }
+  }
+  $("demoBtn").textContent = "▶ שמע דוגמה";
+  $("demoMsg").textContent = "לא הצלחתי להשמיע דוגמה של " + v + " (בדוק חיבור אינטרנט). אפשר לשמוע קולות גם ב-AI Studio.";
+}
+demo.onended = () => { $("demoBtn").textContent = "▶ שמע דוגמה"; $("demoMsg").textContent = "הדוגמה הסתיימה."; };
+$("demoBtn").onclick = playDemo;
+$("voice").addEventListener("change", () => { demo.pause(); demoVoice = null; $("demoBtn").textContent = "▶ שמע דוגמה"; $("demoMsg").textContent = "בחרת " + $("voice").value + ". לחץ על הכפתור כדי לשמוע דוגמה."; });
+
+// ---------- phone/PWA extras ----------
+// keep the screen awake while generating (long runs, 3 requests/minute)
+let wakeLock = null;
+async function wakeOn(){ try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request("screen"); } catch(e){} }
+function wakeOff(){ try { if (wakeLock) wakeLock.release(); } catch(e){} wakeLock = null; }
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && genRunning) wakeOn(); });
+const _genAll = genAll;
+genAll = async function(){ await wakeOn(); try { await _genAll(); } finally { wakeOff(); } };
+$("genBtn").onclick = genAll;
+// lock-screen / headset controls while listening
+function setupMediaSession(){
+  if (!("mediaSession" in navigator)) return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({ title: "קטע " + (playIdx+1) + " מתוך " + chunks.length, artist: "מקריא טקסט עברי" });
+    navigator.mediaSession.setActionHandler("play", () => player.play());
+    navigator.mediaSession.setActionHandler("pause", () => player.pause());
+    navigator.mediaSession.setActionHandler("nexttrack", () => { player.pause(); playIdx++; playCurrent(); });
+    navigator.mediaSession.setActionHandler("previoustrack", () => { player.pause(); playIdx = Math.max(0, playIdx-1); playCurrent(); });
+  } catch(e){}
+}
+const _playCurrent = playCurrent;
+playCurrent = function(){ _playCurrent(); setupMediaSession(); };
+// installable app: offline shell via service worker (works only when served over https)
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+}
+</script>
+</body>
+</html>
